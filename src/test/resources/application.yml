@@ -1,0 +1,12 @@
+logging:
+  level:
+    root: INFO
+    org.springframework.boot.autoconfigure: ERROR
+spring:
+  jpa:
+    hibernate:
+      ddl-auto: validate
+  jmx:
+    enabled: false
+  datasource:
+    url: jdbc:tc:postgresql:14.6:///jwt_kms_poc
