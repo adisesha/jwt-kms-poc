@@ -21,4 +21,4 @@ jobs:
           java-version: '17'
           distribution: 'corretto'
       - name: Run tests
-        run: ./gradlew check
+        run: ./gradlew check --no-daemon
