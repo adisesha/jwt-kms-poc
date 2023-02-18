@@ -22,13 +22,16 @@ repositories {
 dependencies {
 	implementation("org.springframework.boot:spring-boot-starter-data-jpa")
 	implementation("org.springframework.boot:spring-boot-starter-web")
+	implementation("org.springframework.security:spring-security-crypto:6.0.1")
 	implementation("com.fasterxml.jackson.module:jackson-module-kotlin")
 	implementation("org.jetbrains.kotlin:kotlin-reflect")
 	implementation("org.jetbrains.kotlin:kotlin-stdlib")
-	implementation("com.auth0:java-jwt:4.2.1")
-	runtimeOnly("org.postgresql:postgresql:42.5.0")
+	implementation("com.auth0:java-jwt:4.3.0")
+	implementation("org.testcontainers:localstack:1.17.6")
+	implementation("software.amazon.awssdk:kms:2.20.5")
+	implementation("com.amazonaws:aws-java-sdk-core:1.12.407")
+	runtimeOnly("com.h2database:h2:2.1.214")
 	testImplementation("org.springframework.boot:spring-boot-starter-test")
-	testImplementation("org.testcontainers:postgresql:1.17.6")
 }
 
 tasks.withType<KotlinCompile> {
