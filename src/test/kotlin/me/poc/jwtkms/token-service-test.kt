@@ -1,6 +1,6 @@
 package me.poc.jwtkms
 
-import com.auth0.jwt.JWT
+import com.nimbusds.jwt.SignedJWT
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Test
 import org.springframework.beans.factory.annotation.Autowired
@@ -14,7 +14,7 @@ class TokenServiceTest{
     fun authenticate(){
         val req = AuthRequest("username", "password")
         val res =tokenService.authenticate(req)
-        val decodedJwt = JWT.decode(res.body!!.token)
-        assertEquals("username", decodedJwt.subject)
+        val decodedJwt = SignedJWT.parse(res.body!!.token)
+        assertEquals("username", decodedJwt.jwtClaimsSet.subject)
     }
 }
