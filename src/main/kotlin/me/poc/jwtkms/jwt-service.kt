@@ -13,7 +13,6 @@ import software.amazon.awssdk.core.SdkBytes
 import software.amazon.awssdk.services.kms.KmsClient
 import software.amazon.awssdk.services.kms.model.*
 import java.nio.charset.StandardCharsets
-import java.security.SecureRandom
 import java.util.*
 import java.util.regex.Pattern
 
@@ -26,7 +25,7 @@ import java.util.regex.Pattern
 
 @RestController
 @RequestMapping("/")
-class TokenService(
+class JwtService(
     private val kmsClient: KmsClient,
     @Value("\${jwt.issuer}")
     private val jwtIssuer: String,
@@ -59,7 +58,11 @@ class TokenService(
     fun authenticate(authRequest: AuthRequest): ResponseEntity<AuthResponse> {
         //As it's an authentication simulation we explicitly ignore the password here...
         //Validate the login parameter content to avoid malicious input
-        return if (Pattern.matches(usernameValidPattern, authRequest.username)) {
+        if (!Pattern.matches(usernameValidPattern, authRequest.username)) {
+            return ResponseEntity.badRequest().body(AuthResponse(status = "Invalid parameter provided"))
+        }
+
+        return try {
             //Create the token with a validity of 15 minutes and client context (fingerprint) information
             val c = Calendar.getInstance()
             val now = c.time
@@ -79,20 +82,14 @@ class TokenService(
                 HeaderParams.ALGORITHM to "RS256",
             )
             val token = sign(payloadClaims, headerClaims)
-            ResponseEntity.ok(
-                AuthResponse(
-                    status = "OK",
-                    token = token
-                )
-            )
-        } else {
-            ResponseEntity.badRequest().body(AuthResponse(status = "Invalid parameter provided"))
+            ResponseEntity.ok(AuthResponse(status = "Authentication Successful.", token = token))
+        } catch (e: Exception) {
+            ResponseEntity.badRequest().body(AuthResponse(status = "Error while creating token"))
         }
-
     }
 
     @PostMapping("/verify")
-    fun verify(request: VerifyTokenRequest): ResponseEntity<String> {
+    fun verify(request: TokenHolder): ResponseEntity<String> {
         val jwt = JWT.decode(request.token)
         val jwtId = jwt.getClaim(RegisteredClaims.JWT_ID).asString()
         //Check if token is revoked
@@ -109,12 +106,24 @@ class TokenService(
             .signature(SdkBytes.fromByteArray(signature))
             .signingAlgorithm(SigningAlgorithmSpec.RSASSA_PKCS1_V1_5_SHA_256)
             .build()
-        try {
+        return try {
             kmsClient.verify(kmsVerifyRequest)
+            ResponseEntity.ok("Token is valid")
         } catch (e: KmsInvalidSignatureException) {
-            return ResponseEntity.badRequest().body("Token is invalid")
+            ResponseEntity.badRequest().body("Token is invalid")
         }
-        return ResponseEntity.ok("Token is valid")
+    }
+
+    @PostMapping("/revoke")
+    fun revoke(request: TokenHolder): ResponseEntity<String> {
+        //Verify the token before revoking it
+        val verifyResponse = verify(request)
+        return if (verifyResponse.statusCode.is2xxSuccessful) {
+            revokedTokens.add(JWT.decode(request.token).getClaim(RegisteredClaims.JWT_ID).asString())
+            ResponseEntity.ok("Token is revoked")
+        } else {
+            verifyResponse
+        }
     }
 
     // See com.auth0.jwt.JWTCreator.sign
