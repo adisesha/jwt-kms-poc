@@ -1,12 +1,11 @@
 package me.poc.jwtkms
 
 import com.auth0.jwt.HeaderParams
+import com.auth0.jwt.JWT
 import com.auth0.jwt.RegisteredClaims
 import com.fasterxml.jackson.databind.ObjectMapper
 import org.springframework.beans.factory.annotation.Value
-import org.springframework.http.HttpHeaders
 import org.springframework.http.ResponseEntity
-import org.springframework.security.crypto.codec.Hex
 import org.springframework.web.bind.annotation.PostMapping
 import org.springframework.web.bind.annotation.RequestMapping
 import org.springframework.web.bind.annotation.RestController
@@ -14,7 +13,6 @@ import software.amazon.awssdk.core.SdkBytes
 import software.amazon.awssdk.services.kms.KmsClient
 import software.amazon.awssdk.services.kms.model.*
 import java.nio.charset.StandardCharsets
-import java.security.MessageDigest
 import java.security.SecureRandom
 import java.util.*
 import java.util.regex.Pattern
@@ -37,7 +35,13 @@ class TokenService(
     // Initialized in init block
     private val signVerifyKeyId: String
     private val usernameValidPattern = "[a-zA-Z0-9]{1,10}"
-    private val secureRandom = SecureRandom()
+
+    //Storing revoked tokens in memory is not a good idea in a real world application
+    private val revokedTokens = mutableSetOf<String>()
+
+    // Encoder and decoders are thread safe
+    private val base64UrlEncoder = Base64.getUrlEncoder().withoutPadding()
+    private val base64UrlDecoder = Base64.getUrlDecoder()
 
     init {
         // Generate RSA key pairs . The private key is used for signing JWT
@@ -56,22 +60,6 @@ class TokenService(
         //As it's an authentication simulation we explicitly ignore the password here...
         //Validate the login parameter content to avoid malicious input
         return if (Pattern.matches(usernameValidPattern, authRequest.username)) {
-            //Generate a random string that will constitute the fingerprint for this user
-            val randomFgp = ByteArray(50)
-            secureRandom.nextBytes(randomFgp)
-            val userFingerprint = String(Hex.encode(randomFgp))
-
-            //Add the fingerprint in a hardened cookie - Add cookie manually because SameSite attribute is not supported by javax.servlet.http.Cookie class
-            val fingerprintCookie = "__Secure-Fgp=$userFingerprint; SameSite=Strict; HttpOnly; Secure"
-            val headers = HttpHeaders()
-            headers.add(HttpHeaders.SET_COOKIE, fingerprintCookie)
-
-            //Compute a SHA256 hash of the fingerprint in order to store the fingerprint hash (instead of the raw value) in the token
-            //to prevent an XSS to be able to read the fingerprint and set the expected cookie itself
-            val digest = MessageDigest.getInstance("SHA-256")
-            val userFingerprintDigest = digest.digest(userFingerprint.toByteArray(StandardCharsets.UTF_8))
-            val userFingerPrintHash = String(Hex.encode(userFingerprintDigest))
-
             //Create the token with a validity of 15 minutes and client context (fingerprint) information
             val c = Calendar.getInstance()
             val now = c.time
@@ -84,11 +72,11 @@ class TokenService(
                 RegisteredClaims.ISSUER to jwtIssuer,
                 RegisteredClaims.ISSUED_AT to now.time,
                 RegisteredClaims.NOT_BEFORE to now.time,
-                "userFingerprint" to userFingerPrintHash
+                RegisteredClaims.JWT_ID to UUID.randomUUID().toString(),
             )
             val headerClaims = mapOf(
                 HeaderParams.TYPE to "JWT",
-                HeaderParams.ALGORITHM to "RS256"
+                HeaderParams.ALGORITHM to "RS256",
             )
             val token = sign(payloadClaims, headerClaims)
             ResponseEntity.ok(
@@ -101,6 +89,32 @@ class TokenService(
             ResponseEntity.badRequest().body(AuthResponse(status = "Invalid parameter provided"))
         }
 
+    }
+
+    @PostMapping("/verify")
+    fun verify(request: VerifyTokenRequest): ResponseEntity<String> {
+        val jwt = JWT.decode(request.token)
+        val jwtId = jwt.getClaim(RegisteredClaims.JWT_ID).asString()
+        //Check if token is revoked
+        if (revokedTokens.contains(jwtId)) {
+            return ResponseEntity.badRequest().body("Token is revoked")
+        }
+
+        //Verify signature with KMS
+        val signableContent = "${jwt.header}.${jwt.payload}".toByteArray(StandardCharsets.UTF_8)
+        val signature = base64UrlDecoder.decode(jwt.signature)
+        val kmsVerifyRequest = VerifyRequest.builder()
+            .keyId(signVerifyKeyId)
+            .message(SdkBytes.fromByteArray(signableContent))
+            .signature(SdkBytes.fromByteArray(signature))
+            .signingAlgorithm(SigningAlgorithmSpec.RSASSA_PKCS1_V1_5_SHA_256)
+            .build()
+        try {
+            kmsClient.verify(kmsVerifyRequest)
+        } catch (e: KmsInvalidSignatureException) {
+            return ResponseEntity.badRequest().body("Token is invalid")
+        }
+        return ResponseEntity.ok("Token is valid")
     }
 
     // See com.auth0.jwt.JWTCreator.sign
@@ -119,10 +133,7 @@ class TokenService(
     }
 
     private fun encodeBase64UrlSafe(payload: String): String =
-        encodeBase64UrlSafe(payload.toByteArray(StandardCharsets.UTF_8))
-
-    private fun encodeBase64UrlSafe(bytes: ByteArray): String = Base64.getUrlEncoder().withoutPadding()
-        .encodeToString(bytes)
+        base64UrlEncoder.encodeToString(payload.toByteArray(StandardCharsets.UTF_8))
 
     private fun sign(headerBytes: ByteArray, payloadBytes: ByteArray): String {
         val contentBytes = headerBytes + '.'.code.toByte() + payloadBytes
@@ -133,7 +144,7 @@ class TokenService(
             .signingAlgorithm(SigningAlgorithmSpec.RSASSA_PKCS1_V1_5_SHA_256)
             .build()
         val signResponse = kmsClient.sign(signRequest)
-        return encodeBase64UrlSafe(signResponse.signature().asByteArray())
+        return base64UrlEncoder.encodeToString(signResponse.signature().asByteArray())
     }
 
 }
