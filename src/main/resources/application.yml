@@ -3,15 +3,7 @@ logging:
     root: INFO
     org.springframework.boot.autoconfigure: ERROR
 spring:
-  jpa:
-    hibernate:
-      ddl-auto: validate
   jmx:
     enabled: false
-  datasource:
-    url: jdbc:h2:mem:testdb
-    username: sa
-    password: password
-
 jwt:
   issuer: 5beb7bd2-8528-4e73-84dd-6e82f18a76ff
